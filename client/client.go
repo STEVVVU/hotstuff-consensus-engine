@@ -57,6 +57,7 @@ type Config struct {
 	RateStep         float64       // rate limit step up
 	RateStepInterval time.Duration // step up interval
 	Timeout          time.Duration
+	Observe          func(CommandSample) // optional bounded benchmark observer
 }
 
 // Client is a hotstuff client.
@@ -78,6 +79,7 @@ type Client struct {
 	stepUp           float64
 	stepUpInterval   time.Duration
 	timeout          time.Duration
+	measurements     *commandMeasurements
 }
 
 // New returns a new Client.
@@ -101,6 +103,9 @@ func New(
 		stepUp:           conf.RateStep,
 		stepUpInterval:   conf.RateStepInterval,
 		timeout:          conf.Timeout,
+	}
+	if conf.Observe != nil {
+		client.measurements = &commandMeasurements{pending: make(map[uint64]CommandSample), observe: conf.Observe}
 	}
 
 	var creds credentials.TransportCredentials
@@ -160,6 +165,7 @@ func (c *Client) Run(ctx context.Context) {
 	c.close()
 
 	commandStats := <-commandStatsChan
+	c.measurements.close(time.Now())
 	c.logger.Infof(
 		"Done sending commands (executed: %d, failed: %d, timeouts: %d)",
 		commandStats.executed, commandStats.failed, commandStats.timeout,
@@ -190,6 +196,7 @@ func (c *Client) close() {
 }
 
 func (c *Client) sendCommands(ctx context.Context) error {
+	scheduledStart := time.Now()
 	var (
 		num         uint64 = 1
 		lastCommand uint64 = math.MaxUint64
@@ -238,6 +245,12 @@ loop:
 		}
 
 		ctx, cancel := context.WithTimeout(ctx, c.timeout)
+		dispatched := time.Now()
+		scheduled := dispatched
+		if c.measurements != nil && c.stepUp == 0 && !math.IsInf(float64(c.limiter.Limit()), 0) && c.limiter.Limit() > 0 {
+			scheduled = scheduledStart.Add(time.Duration(float64(num-1) / float64(c.limiter.Limit()) * float64(time.Second)))
+		}
+		c.measurements.dispatch(num, scheduled, dispatched, cmd.Data)
 		promise := c.gorumsConfig.ExecCommand(ctx, cmd)
 		pending := pendingCmd{sequenceNumber: num, sendTime: time.Now(), promise: promise, cancelCtx: cancel}
 
@@ -275,17 +288,23 @@ func (c *Client) handleCommands(ctx context.Context) (executed, failed, timeout 
 			return
 		}
 		_, err := cmd.promise.Get()
+		outcome := "finished"
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
+				outcome = "timed_out"
 				c.logger.Debug("Command timed out.")
 				timeout++
 			} else if !errors.Is(err, context.Canceled) {
+				outcome = "failed"
 				c.logger.Debugf("Did not get enough replies for command: %v\n", err)
 				failed++
+			} else {
+				outcome = "canceled"
 			}
 		} else {
 			executed++
 		}
+		c.measurements.complete(cmd.sequenceNumber, outcome, time.Now(), err)
 		c.mut.Lock()
 		if cmd.sequenceNumber > c.highestCommitted {
 			c.highestCommitted = cmd.sequenceNumber

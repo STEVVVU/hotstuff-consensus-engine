@@ -29,6 +29,10 @@ func Enable[T client.ID | hotstuff.ID](
 	enabledMetrics := []string{}
 	for _, name := range metricNames {
 		switch name {
+		case NameClientCommands:
+			if _, ok := any(id).(client.ID); ok {
+				enabledMetrics = append(enabledMetrics, NameClientCommands)
+			}
 		case NameClientLatency:
 			if clientID, ok := any(id).(client.ID); ok {
 				enableClientLatency(eventLoop, metricsLogger, clientID)

@@ -4,3 +4,4 @@
 | --- | --- |
 | Local network | [network.md](network.md) |
 | Twins campaign and replay | [twins.md](twins.md) |
+| Frozen native load and explicit isolation diagnosis | [benchmark.md](benchmark.md) |

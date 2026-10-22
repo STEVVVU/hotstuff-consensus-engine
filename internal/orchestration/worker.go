@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	mathrand "math/rand"
 	"net"
 	"strconv"
 	"time"
@@ -392,6 +393,13 @@ func (w *Worker) startClients(req *orchestrationpb.StartClientRequest) (*orchest
 			Timeout:          opts.GetTimeout().AsDuration(),
 		}
 		logger := logging.New("cli" + opts.ClientIDString())
+		for _, metric := range w.metrics {
+			if metric == metrics.NameClientCommands {
+				c.Observe = metrics.CommandObserver(w.metricsLogger, opts.ClientID())
+				c.Input = io.NopCloser(mathrand.New(mathrand.NewSource(421 + int64(opts.ClientID()))))
+				break
+			}
+		}
 		eventLoop := eventloop.New(logger, 1000)
 
 		if w.measurementInterval > 0 {

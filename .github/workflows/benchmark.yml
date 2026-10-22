@@ -1,0 +1,61 @@
+name: Consensus benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        description: Isolated native benchmark, separate profile or isolation diagnostic
+        options: [benchmark, profile, isolation]
+        default: benchmark
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CGO_ENABLED: '0'
+      GOMAXPROCS: '2'
+      GOTOOLCHAIN: local
+      GOMEMLIMIT: 768MiB
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: go mod verify
+      - run: go test -p 2 -timeout 3m ./...
+      - run: go vet -p 2 ./...
+      - run: go build -p 2 -o scratch/hotstuff.exe ./cmd/hotstuff
+      - run: go build -p 2 -o scratch/campaign.exe ./cmd/campaign
+      - run: python -m unittest discover -s tools -p test_benchmark.py -v
+      - run: python -m unittest discover -s tools -p test_verify.py -v
+      - run: python tools/verify.py --hotstuff scratch/hotstuff.exe --campaign scratch/campaign.exe --output scratch/native-proof
+      - run: python tools/benchmark.py smoke
+      - run: python tools/benchmark.py ${{ inputs.mode }}
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: consensus-benchmark-${{ inputs.mode }}-${{ github.sha }}
+          path: |
+            scratch/native-proof/summary.json
+            scratch/native-proof/campaign/results.json
+            scratch/native-proof/campaign/scenarios.json
+            scratch/native-proof/replay/results.json
+            scratch/benchmark-*/summary.json
+            scratch/benchmark-*/trial-*/result.json
+            scratch/benchmark-*/trial-*/resources.json
+            scratch/benchmark-*/trial-*/metrics-safe.json
+            scratch/benchmark-*/trial-*/network.log
+            scratch/benchmark-*/trial-*/network/local/cpuprofile
+            scratch/benchmark-*/trial-*/network/local/memprofile
+            scratch/benchmark-*/isolation/result.json
+            scratch/benchmark-*/isolation/campaign/results.json
+            scratch/benchmark-*/isolation/campaign/00-network.log
+          retention-days: 14
+

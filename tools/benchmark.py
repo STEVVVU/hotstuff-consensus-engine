@@ -86,9 +86,11 @@ def trial(path,cell,profile=False,binary=None):
         result['steady_window']=dict(scope='Exclude first2s warmup and final2s shutdown boundary; all whole-run outcomes remain above.',expected_offers=expected_steady,dispatched=len(steady_keys),finished=len(steady_finished),latency_ms=quantiles([r['latency_ms'] for r in steady_finished]),dispatch_lag_ms=quantiles([starts[key]['dispatch_lag_ms'] for key in steady_keys]))
         result['load_slo_passed']=result['passed'] and expected_steady>0 and len(steady_finished)==len(steady_keys)==expected_steady and result['steady_window']['dispatch_lag_ms']['p99']<100 and result['steady_window']['latency_ms']['p99']<5000
         if profile:
-            profiles=list(output.rglob('cpuprofile'));assert profiles and all(file.stat().st_size for file in profiles),'missing native CPU profile'
+            profiles=[output/'local'/name for name in ['cpuprofile','memprofile']]
+            assert all(file.is_file() and file.stat().st_size for file in profiles),'missing native CPU or heap profile'
             result['profile_files']=[str(file.relative_to(run.path)) for file in profiles]
-    except Exception as error:result['error']=repr(error)
+            result['profile_scope']='CPU covers the native local-worker lifecycle; heap is captured after worker shutdown and forced GC. Allocation history remains useful; live retained roots may already be released. Profile timings are excluded from comparisons.'
+    except Exception as error:result.update(passed=False,error=repr(error))
     finally:
         result['cleanup']=run.cleanup()
         result['passed']=result['passed'] and result['cleanup']['all_exited'] and not result['cleanup']['errors']
@@ -126,7 +128,7 @@ def main():
         base=dict(replicas=4,payload=32,clients=1,concurrency=4,rate=30,seconds=3)
         if args.mode=='smoke':run(base)
         elif args.mode=='isolation':summary['isolation']=isolation(directory/'isolation');summary['trials'].append(summary['isolation'])
-        elif args.mode=='profile':run(dict(base,payload=1024,rate=1000,concurrency=32,seconds=30))
+        elif args.mode=='profile':run(dict(base,payload=1024,rate=300,concurrency=32,seconds=120))
         else:
             matrix=cells()
             for repeat in range(WORKLOAD['repeats']):

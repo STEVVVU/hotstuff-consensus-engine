@@ -1,0 +1,3 @@
+# Project conventions
+
+Preserve upstream module path, public APIs, generated protobuf sources, LICENSE and docs/README.upstream.md. Use the verification skill at .agents/skills/verify-hotstuff/SKILL.md. Build with Go 1.27.3, GOTOOLCHAIN=local, CGO_ENABLED=0 and GOMAXPROCS=2. Run `go test -p 2 -timeout 3m ./...`, `go vet -p 2 ./...`, `go mod verify`, then build both binaries and run tools/verify.py against a fresh scratch directory. The orchestration package test may take roughly two minutes. Keep generated logs, binaries, keys and raw run evidence under ignored scratch/. Never invoke SSH or remote deployment scripts for local verification. Do not describe replica goroutines or Twins nodes as separate processes. CI is verification only.

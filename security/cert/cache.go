@@ -3,6 +3,8 @@ package cert
 import (
 	"container/list"
 	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -59,19 +61,24 @@ func (cache *Cache) Sign(message []byte) (sig hotstuff.QuorumSignature, err erro
 		return nil, err
 	}
 	var key strings.Builder
+	key.WriteByte(0)
 	hash := sha256.Sum256(message)
 	_, _ = key.Write(hash[:])
-	_, _ = key.Write(sig.ToBytes())
+	writeSignatureKey(&key, sig)
 	cache.insert(key.String())
 	return sig, nil
 }
 
 // Verify verifies the given quorum signature against the message.
 func (cache *Cache) Verify(signature hotstuff.QuorumSignature, message []byte) error {
+	if signature == nil {
+		return fmt.Errorf("nil signature")
+	}
 	var key strings.Builder
+	key.WriteByte(0)
 	hash := sha256.Sum256(message)
 	_, _ = key.Write(hash[:])
-	_, _ = key.Write(signature.ToBytes())
+	writeSignatureKey(&key, signature)
 
 	if cache.check(key.String()) {
 		return nil
@@ -87,19 +94,25 @@ func (cache *Cache) Verify(signature hotstuff.QuorumSignature, message []byte) e
 
 // BatchVerify verifies the given quorum signature against the batch of messages.
 func (cache *Cache) BatchVerify(signature hotstuff.QuorumSignature, batch map[hotstuff.ID][]byte) error {
+	if signature == nil {
+		return fmt.Errorf("nil signature")
+	}
 	// sort the list of ids from the batch map
 	ids := slices.Sorted(maps.Keys(batch))
 	var hash hotstuff.Hash
 	hasher := sha256.New()
 	// then hash the messages in sorted order
 	for _, id := range ids {
+		_, _ = hasher.Write(binary.LittleEndian.AppendUint32(nil, uint32(id)))
+		_, _ = hasher.Write(binary.LittleEndian.AppendUint64(nil, uint64(len(batch[id]))))
 		_, _ = hasher.Write(batch[id])
 	}
-	hasher.Sum(hash[:])
+	copy(hash[:], hasher.Sum(nil))
 
 	var key strings.Builder
+	key.WriteByte(1)
 	_, _ = key.Write(hash[:])
-	_, _ = key.Write(signature.ToBytes())
+	writeSignatureKey(&key, signature)
 
 	if cache.check(key.String()) {
 		return nil
@@ -119,3 +132,10 @@ func (cache *Cache) Combine(signatures ...hotstuff.QuorumSignature) (hotstuff.Qu
 }
 
 var _ crypto.Base = (*Cache)(nil)
+
+func writeSignatureKey(key *strings.Builder, signature hotstuff.QuorumSignature) {
+	encoded := signature.ToBytes()
+	_, _ = key.Write(binary.LittleEndian.AppendUint64(nil, uint64(len(encoded))))
+	_, _ = key.Write(encoded)
+	signature.Participants().ForEach(func(id hotstuff.ID) { _, _ = key.Write(binary.LittleEndian.AppendUint32(nil, uint32(id))) })
+}

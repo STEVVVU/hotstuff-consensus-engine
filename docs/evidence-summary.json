@@ -1,0 +1,216 @@
+{
+  "upstream": "3179c6e62929294961acbfd9bf8445769716a121",
+  "platform": "Windows CPU, Go 1.27.3, Python 3.11, CGO off",
+  "passed": true,
+  "seed": 244,
+  "journeys": [
+    {
+      "name": "healthy",
+      "passed": true,
+      "honest_commit_counts": {
+        "r1n0": 21,
+        "r2n0": 21,
+        "r3n0": 21,
+        "r4n0": 21
+      }
+    },
+    {
+      "name": "leader-loss-heal",
+      "passed": true,
+      "honest_commit_counts": {
+        "r1n0": 20,
+        "r2n0": 20,
+        "r3n0": 20,
+        "r4n0": 20
+      }
+    },
+    {
+      "name": "leader-loss-honest-quorum",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 20,
+        "r3n0": 20,
+        "r4n0": 20
+      }
+    },
+    {
+      "name": "no-quorum",
+      "passed": true,
+      "honest_commit_counts": {
+        "r1n0": 0,
+        "r2n0": 0,
+        "r3n0": 0,
+        "r4n0": 0
+      }
+    },
+    {
+      "name": "twins-heal",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 20,
+        "r3n0": 20,
+        "r4n0": 20
+      }
+    },
+    {
+      "name": "seed-244-0",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 2,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-1",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 2,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-2",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 2,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-3",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 2,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-4",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 0,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-5",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 2,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-6",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 0,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-7",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 0,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-8",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 0,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-9",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 2,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-10",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 0,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    },
+    {
+      "name": "seed-244-11",
+      "passed": true,
+      "honest_commit_counts": {
+        "r2n0": 0,
+        "r3n0": 2,
+        "r4n0": 2
+      }
+    }
+  ],
+  "replay_passed": true,
+  "network": {
+    "measurement_records": 59,
+    "nonzero_records": 27,
+    "executions": [
+      [
+        "1",
+        "88",
+        "aea316a0bcb0444e4c5c8e2c676384058b4aebf45e0a9d9c8f32e3962c5bcb76"
+      ],
+      [
+        "2",
+        "88",
+        "aea316a0bcb0444e4c5c8e2c676384058b4aebf45e0a9d9c8f32e3962c5bcb76"
+      ],
+      [
+        "3",
+        "88",
+        "aea316a0bcb0444e4c5c8e2c676384058b4aebf45e0a9d9c8f32e3962c5bcb76"
+      ],
+      [
+        "4",
+        "88",
+        "aea316a0bcb0444e4c5c8e2c676384058b4aebf45e0a9d9c8f32e3962c5bcb76"
+      ]
+    ],
+    "process_model": "one local worker process, four networked replica goroutines"
+  },
+  "failure_controls": {
+    "exit7_preserved_false": true,
+    "timeout_preserved_false": true,
+    "owned_parent_child_stopped": true,
+    "listener_closed": true
+  },
+  "known_failed_experiment": {
+    "name": "permanent replica1 isolation with round-robin leaders",
+    "passed": false,
+    "honest_commits": 0,
+    "ticks": 300
+  },
+  "scan": {
+    "called_vulnerabilities": 0,
+    "imported_package_vulnerabilities": 0,
+    "module_only_advisory": "GO-2026-5932"
+  },
+  "limits": [
+    "no race detector without CGO",
+    "no durable restart safety",
+    "no universal BFT proof",
+    "healthy real network run; emulated faults",
+    "GitHub CI not executed"
+  ]
+}

@@ -39,3 +39,5 @@ internal/tree/benchmarkdata/*
 core/eventloop/benchmarkdata/*
 eventloop/benchmarkdata/*
 scratch/*
+__pycache__/
+*.pyc

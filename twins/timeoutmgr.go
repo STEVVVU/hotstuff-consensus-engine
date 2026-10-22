@@ -50,6 +50,7 @@ func newTimeoutManager(
 		eventLoop:  el,
 		viewStates: viewStates,
 		timeout:    5,
+		countdown:  5,
 	}
 	eventloop.Register(el, func(_ tick) {
 		tm.advance()

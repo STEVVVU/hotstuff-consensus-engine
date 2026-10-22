@@ -224,6 +224,9 @@ func (e *Experiment) stopReplicas(replicaMap config.ReplicaMap) error {
 			return err
 		}
 		responses = append(responses, res)
+		for id, count := range res.GetCounts() {
+			e.logger.Infof("Execution evidence replica=%d commands=%d hash=%x", id, count, res.GetHashes()[id])
+		}
 	}
 	return verifyStopResponses(responses)
 }

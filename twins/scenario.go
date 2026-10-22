@@ -1,6 +1,8 @@
 package twins
 
 import (
+	"crypto/sha256"
+	"crypto/x509"
 	"fmt"
 	"strconv"
 	"strings"
@@ -40,11 +42,12 @@ func (s Scenario) String() string {
 
 // ScenarioResult contains the result and logs from executing a scenario.
 type ScenarioResult struct {
-	Safe        bool
-	Commits     int
-	NetworkLog  string
-	NodeLogs    map[NodeID]string
-	NodeCommits map[NodeID][]*hotstuff.Block
+	Safe                bool
+	Commits             int
+	NetworkLog          string
+	NodeLogs            map[NodeID]string
+	NodeCommits         map[NodeID][]*hotstuff.Block
+	NodeKeyFingerprints map[NodeID]string
 }
 
 // ExecuteScenario executes a twins scenario.
@@ -70,8 +73,14 @@ func ExecuteScenario(scenario Scenario, numNodes, numTwins uint8, numTicks int, 
 	network.run(numTicks)
 
 	nodeLogs := make(map[NodeID]string)
+	keyFingerprints := make(map[NodeID]string)
 	for _, node := range network.nodes {
 		nodeLogs[node.id] = node.log.String()
+		key, keyErr := x509.MarshalPKIXPublicKey(node.config.PrivateKey().Public())
+		if keyErr != nil {
+			return ScenarioResult{}, keyErr
+		}
+		keyFingerprints[node.id] = fmt.Sprintf("%x", sha256.Sum256(key))
 	}
 
 	if network.err != nil {
@@ -84,11 +93,12 @@ func ExecuteScenario(scenario Scenario, numNodes, numTwins uint8, numTicks int, 
 	safe, commits := checkCommits(network)
 
 	return ScenarioResult{
-		Safe:        safe,
-		Commits:     commits,
-		NetworkLog:  network.log.String(),
-		NodeCommits: getBlocks(network),
-		NodeLogs:    nodeLogs,
+		Safe:                safe,
+		Commits:             commits,
+		NetworkLog:          network.log.String(),
+		NodeCommits:         getBlocks(network),
+		NodeLogs:            nodeLogs,
+		NodeKeyFingerprints: keyFingerprints,
 	}, nil
 }
 

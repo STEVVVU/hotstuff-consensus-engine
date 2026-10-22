@@ -116,6 +116,9 @@ func (c *Authority) VerifyPartialCert(cert hotstuff.PartialCert) error {
 func (c *Authority) VerifyQuorumCert(qc hotstuff.QuorumCert) error {
 	// genesis QC is always valid.
 	if qc.BlockHash() == hotstuff.GetGenesis().Hash() {
+		if qc.View() != 0 {
+			return fmt.Errorf("genesis quorum certificate must have view zero")
+		}
 		return nil
 	}
 
@@ -127,12 +130,15 @@ func (c *Authority) VerifyQuorumCert(qc hotstuff.QuorumCert) error {
 
 	participants := qcSignature.Participants()
 	quorumSize := c.config.QuorumSize()
-	if participants.Len() < quorumSize {
+	if !distinctQuorum(participants, quorumSize) {
 		return fmt.Errorf("%d participants cannot satisfy the quorum requirement: %d", participants.Len(), quorumSize)
 	}
 	block, ok := c.blockchain.Get(qc.BlockHash())
 	if !ok {
 		return fmt.Errorf("block not found: %v", qc.BlockHash())
+	}
+	if qc.View() != block.View() {
+		return fmt.Errorf("quorum certificate view does not match block view")
 	}
 	return c.Verify(qc.Signature(), block.ToBytes())
 }
@@ -143,9 +149,12 @@ func (c *Authority) VerifyTimeoutCert(tc hotstuff.TimeoutCert) error {
 	if tc.View() == 0 {
 		return nil
 	}
+	if tc.Signature() == nil {
+		return fmt.Errorf("timeout certificate has nil signature")
+	}
 	quorumSize := c.config.QuorumSize()
 	participants := tc.Signature().Participants()
-	if participants.Len() < quorumSize {
+	if !distinctQuorum(participants, quorumSize) {
 		return fmt.Errorf("%d participants cannot satisfy the quorum requirement: %d", participants.Len(), quorumSize)
 	}
 	return c.Verify(tc.Signature(), tc.View().ToBytes())
@@ -153,6 +162,9 @@ func (c *Authority) VerifyTimeoutCert(tc hotstuff.TimeoutCert) error {
 
 // VerifyAggregateQC verifies the AggregateQC and returns the highQC, if valid.
 func (c *Authority) VerifyAggregateQC(aggQC hotstuff.AggregateQC) (highQC hotstuff.QuorumCert, err error) {
+	if aggQC.Sig() == nil {
+		return hotstuff.QuorumCert{}, fmt.Errorf("aggregate quorum certificate has nil signature")
+	}
 	messages := make(map[hotstuff.ID][]byte)
 	qcs := make([]hotstuff.QuorumCert, len(aggQC.QCs()))
 	for id, qc := range aggQC.QCs() {
@@ -166,7 +178,7 @@ func (c *Authority) VerifyAggregateQC(aggQC hotstuff.AggregateQC) (highQC hotstu
 	}
 	quorumSize := c.config.QuorumSize()
 	participants := aggQC.Sig().Participants()
-	if participants.Len() < quorumSize {
+	if !distinctQuorum(participants, quorumSize) {
 		return hotstuff.QuorumCert{}, fmt.Errorf("%d participants cannot satisfy the quorum requirement: %d", participants.Len(), quorumSize)
 	}
 	// both the batched aggQC signatures and the highQC must be verified
@@ -208,4 +220,16 @@ func (c *Authority) VerifyAnyQC(proposal *hotstuff.ProposeMsg) error {
 		}
 	}
 	return c.VerifyQuorumCert(qc)
+}
+
+func distinctQuorum(participants hotstuff.IDSet, quorumSize int) bool {
+	ids := make(map[hotstuff.ID]struct{})
+	duplicate := false
+	participants.ForEach(func(id hotstuff.ID) {
+		if _, exists := ids[id]; exists {
+			duplicate = true
+		}
+		ids[id] = struct{}{}
+	})
+	return !duplicate && len(ids) >= quorumSize
 }

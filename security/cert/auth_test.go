@@ -336,8 +336,7 @@ func TestVerifyAggregateQCModifiedAggregateQC(t *testing.T) {
 	}
 }
 
-// TestVerifyAggregateQCPanic tests AggregateQC verification for cases that are expected to panic.
-func TestVerifyAggregateQCPanic(t *testing.T) {
+func TestVerifyAggregateQCMalformedSignature(t *testing.T) {
 	tests := []struct {
 		name   string
 		modify func(hotstuff.AggregateQC, []*cert.Authority) hotstuff.AggregateQC
@@ -361,17 +360,8 @@ func TestVerifyAggregateQCPanic(t *testing.T) {
 						t.Fatalf("unexpected error creating AggregateQC: %v", err)
 					}
 					aggQC = tc.modify(aggQC, signers)
-					panicked := false
-					func() {
-						defer func() {
-							if r := recover(); r != nil {
-								panicked = true
-							}
-						}()
-						_, _ = signers[0].VerifyAggregateQC(aggQC)
-					}()
-					if !panicked {
-						t.Errorf("expected panic during VerifyAggregateQC, but none occurred")
+					if _, err := signers[0].VerifyAggregateQC(aggQC); err == nil {
+						t.Error("malformed aggregate signature accepted")
 					}
 				})
 			}

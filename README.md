@@ -1,140 +1,38 @@
-# hotstuff
+# HotStuff consensus engine
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/relab/consensus.svg)](https://pkg.go.dev/github.com/relab/hotstuff)
-![Test](https://github.com/relab/hotstuff/workflows/Test/badge.svg)
-![golangci-lint](https://github.com/relab/hotstuff/workflows/golangci-lint/badge.svg)
-[![codecov](https://codecov.io/gh/relab/hotstuff/branch/master/graph/badge.svg?token=IYZ7WD6ZAH)](https://codecov.io/gh/relab/hotstuff)
+A local adversarial workbench around the complete MIT-licensed [relab/hotstuff](https://github.com/relab/hotstuff) framework. It retains the upstream chained HotStuff, Fast HotStuff, Simple HotStuff, ECDSA/EdDSA/BLS crypto, Gorums networking, pacemaker, block fetch, clients and Twins executor. The added campaign saves exact partition scenarios, checks every overlapping honest commit prefix, rejects vacuous recovery, and replays failures.
 
-`relab/hotstuff` is a framework for experimenting with HotStuff and similar consensus protocols.
-It provides a set of modules and interfaces that make it easy to test different algorithms.
-It also provides a tool for deploying and running experiments on multiple servers via SSH.
+This adaptation is inspired by Stanford CS244b's [HotStuff capstone report](https://www.scs.stanford.edu/24sp-cs244b/projects/HotStuff_Implementation_and_Advice.pdf), using a reusable framework rather than copying unlicensed student code. The algorithms and Twins framework are inherited. Read [provenance](docs/provenance.md), the unchanged [license](LICENSE), and the preserved [upstream README](docs/README.upstream.md).
 
-_If you use this project for research, please cite the [APpLIED workshop paper](https://dl.acm.org/doi/10.1145/3584684.3597266) and the repository itself._
+## Run locally
 
-## Contents
+Use Go 1.27.3 and Python 3. No cloud, SSH server, Docker, GPU or protobuf regeneration is needed.
 
-- [hotstuff](#hotstuff)
-  - [Contents](#contents)
-  - [Build Dependencies](#build-dependencies)
-  - [Getting Started](#getting-started)
-    - [Linux and macOS](#linux-and-macos)
-    - [Windows](#windows)
-  - [Running Experiments](#running-experiments)
-  - [Safety Testing with Twins](#safety-testing-with-twins)
-  - [Modules](#modules)
-  - [Consensus Interfaces](#consensus-interfaces)
-  - [Crypto Interfaces](#crypto-interfaces)
-  - [References](#references)
+```powershell
+$env:GOTOOLCHAIN='local'
+$env:CGO_ENABLED='0'
+$env:GOMAXPROCS='2'
+go build -p 2 -o scratch/hotstuff.exe ./cmd/hotstuff
+go build -p 2 -o scratch/campaign.exe ./cmd/campaign
+python tools/verify.py --hotstuff scratch/hotstuff.exe --campaign scratch/campaign.exe --output scratch/proof
+go test -p 2 -timeout 3m ./...
+go vet -p 2 ./...
+```
 
-## Build Dependencies
+Use a fresh evidence directory. The Python driver runs doctor, 17 bounded Twins journeys, replay, and a three-second four-replica/one-client network run. It records commands, exit codes, logs, measurements and passed=false on failure. It supplies empty local config files so user SSH/configuration is never used. The empty SSH file satisfies the inherited local runner's parser; no remote hosts are contacted. Each subprocess has a 45-second deadline.
 
-- [Go](https://go.dev) (at least version 1.18)
+```powershell
+scratch/campaign.exe -input scratch/proof/campaign/scenarios.json -output scratch/replay
+```
 
-If you modify any of the protobuf files, you will need the following to compile them:
+Campaign inputs are capped at 69 cases, 40 views per case and 300 emulation ticks. Seeded cases have one twin identity and two partitions. Controlled journeys cover healthy progress, initial leader isolation/healing, permanent isolation of replica 1 while the three honest replicas progress, twin partition/healing, and no progress without quorum. Results contain honest commit hashes/views, QC participant counts and ephemeral public-key fingerprints. Private keys stay in memory. Upstream map scheduling, timestamps and keys vary, so scenario replay does not promise byte-identical traces.
 
-- [Protobuf compiler](https://github.com/protocolbuffers/protobuf) (at least version 3.15)
+## Evidence and limits
 
-- The gRPC and gorums plugins for protobuf.
-  - Linux and macOS users can run `make tools` to install these.
-  - The Windows build script downloads them automatically.
-  - They can also be installed manually:
-    - `go install github.com/relab/gorums/cmd/protoc-gen-gorums`
-    - `go install google.golang.org/protobuf/cmd/protoc-gen-go`
+The [verification skill](.agents/skills/verify-hotstuff/SKILL.md) and feature map are the maintained entry point. [Validation notes](docs/validation.md) record reproduced defects and evidence. The adapter validates distinct certificate signers and QC views, rejects malformed certificates, binds verification-cache entries to signer identities and message contents, initializes the emulated timeout countdown, and adds focused regressions, an intentionally conflicting commit-oracle control, and duplicate client execution checks.
 
-## Getting Started
+The local runner uses four replica goroutines and real loopback sockets in one process. Twins emulates networking. Neither is a four-process crash experiment. Client commands carry IDs and sequence numbers but are not application-signed; network runs use TLS and replica QCs use ECDSA. ClientIO suppresses repeated execution by sequence number. There is no persistent anti-double-voting or restart recovery. Storage is an in-memory block cache. A bounded campaign is evidence for these journeys, not a universal BFT proof or performance benchmark. Partitions are indexed by each sender's effective view; recovery assertions cover the explicit one-view isolation/healing journey.
 
-### Linux and macOS
+Permanent replica 1 isolation with round-robin leaders did not commit within 300 ticks in the controlled experiment. The inherited protocol collects votes at the next leader and requires consecutive-view certified chains. The passing permanent-isolation journey therefore switches to stable honest leader 2 after the initial failed leader. It does not establish liveness for arbitrary leader schedules. This limitation is retained in the validation notes.
 
-- Compile command line utilities by running `make`.
-
-### Windows
-
-- Run `.\build.ps1` with PowerShell.
-
-**NOTE**: you should use `./hotstuff.exe` instead of `./hotstuff` when running commands.
-
-## Running Experiments
-
-See the [experimentation documentation](docs/experimentation.md) for details.
-
-The `hotstuff` command line utility can be used to run experiments locally, or on remote servers using SSH.
-For a list of options, run `./hotstuff help run`.
-
-The `plot` command line utility can be used to create graphs from measurements.
-Run `./plot --help` for a list of options.
-
-## Safety Testing with Twins
-
-We have implemented the Twins strategy [6] for testing the safety of the consensus implementations.
-See the [twins documentation](docs/twins.md) for details.
-
-## Modules
-
-The following components are modular:
-
-- Consensus
-  - The "core" of the consensus protocol, which decides when a replica should vote for a proposal,
-    and when a block should be committed.
-  - 3 implementations:
-    - `chainedhotstuff`: The three-phase pipelined HotStuff protocol presented in the HotStuff paper [1].
-    - `fasthotstuff`: A two-chain version of HotStuff designed to prevent forking attacks [3].
-    - `simplehotstuff`: A simplified version of chainedhotstuff [4].
-- Crypto
-  - Implements the cryptographic primitives used by HotStuff, namely quorum certificates.
-  - 2 implementations:
-    - `ecdsa`: A very simple implementation where quorum certificates are represented by arrays of ECDSA signatures.
-    - `bls12`: An implementation of threshold signatures based on BLS12-381 aggregated signatures.
-- Synchronizer
-  - Implements a view-synchronization algorithm. It is responsible for synchronizing replicas to the same view number.
-  - Current implementation based on [DiemBFT's RoundState](https://github.com/diem/diem/tree/main/consensus/src/liveness) [5].
-- Blockchain
-  - Implements storage for the block chain. Currently we have an in-memory cache of a fixed size.
-- Leader rotation
-  - Decides which replica should be the leader of a view.
-  - Currently either a fixed leader or round-robin.
-- Networking/Backend
-  - Using [Gorums](https://github.com/relab/gorums) [2]
-
-These modules are designed to be interchangeable and simple to implement.
-It is also possible to add custom modules that can interact with the modules we listed above.
-
-## Consensus Interfaces
-
-There are two ways to implement a new consensus protocol, depending on the requirements of the new protocol.
-The `Consensus` module interface is the most general, but also the most difficult to implement.
-That is because it is oriented towards the other modules, and the other modules rely on it to perform certain operations,
-such as verifying proposals, interacting with the `Blockchain`, `Acceptor`, `Executor`, and `Synchronizer` modules,
-and so on. That is why we provide a simplified `Rules` interface and the optional `ProposeRuler` interface.
-These interfaces are only required to implement the core rules of the consensus protocol, namely deciding whether or not
-to vote for a proposal, whether or not it is safe to commit a block, and optionally how to create new blocks.
-These interfaces do not require any interaction with other modules, as that is taken care of by a
-[default implementation](consensus/consensus.go) of the `Consensus` interface.
-
-The `Consensus` and `Rules` interfaces can also be used to override the behavior of other consensus implementations.
-The `rules/byzantine` package contains some examples of byzantine behaviors that can be implemented by wrapping
-implementations of these interfaces.
-
-## Crypto Interfaces
-
-In a similar way to the `Consensus` interface, the `Crypto` interface also introduces a simplified, lower-level interface
-that should be used to implement new crypto algorithms.
-The `Crypto` interface itself provides methods for working with the high-level structures such as quorum certificates.
-However, to make it easy to implement new crypto algorithms, the `CryptoImpl` interface can be used instead.
-This interface deals with signatures and threshold signatures directly, which are used by the `Crypto` interface
-to implement quorum certificates.
-
-## References
-
-[1] M. Yin, D. Malkhi, M. K. Reiter, G. Golan Gueta, and I. Abraham, “HotStuff: BFT Consensus in the Lens of Blockchain,” Mar 2018.
-
-[2] Tormod Erevik Lea, Leander Jehl, and Hein Meling. Towards New Abstractions for Implementing Quorum-based Systems. In 37th International Conference on Distributed Computing Systems (ICDCS), Jun 2017.
-
-[3] Mohammad M. Jalalzai, Jianyu Niu, Chen Feng, Fangyu Gai. Fast-HotStuff: A Fast and Resilient HotStuff Protocol, Oct 2020.
-
-[4] Leander Jehl. Formal Verification of HotStuff, Jun 2021.
-
-[5] Baudet, Mathieu, et al. "State machine replication in the libra blockchain." The Libra Assn., Tech. Rep (2019).
-
-[6] S. Bano, A. Sonnino, A. Chursin, D. Perelman, en D. Malkhi, “Twins: White-Glove Approach for BFT Testing”, 2020.
-
-[7] Hanish Gogada, Hein Meling, Leander Jehl, and John Ingve Olsen. [An Extensible Framework for Implementing and Validating Byzantine Fault-Tolerant Protocols](https://dl.acm.org/doi/10.1145/3584684.3597266). In ApPLIED 2023: Proceedings of the 5th workshop on Advanced tools, programming languages, and PLatforms for Implementing and Evaluating algorithms for Distributed systems, 2023.
+The dependency fix moves gRPC 1.78 to 1.84 and updates affected x/net, x/crypto, x/image and x/text modules to fixed versions. Original workflow files remain inactive under docs/upstream-workflows. CI runs bounded read-only local checks.

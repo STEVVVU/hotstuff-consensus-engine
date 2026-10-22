@@ -11,8 +11,8 @@ jobs:
       GOMAXPROCS: '2'
       GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.27.3'
       - uses: actions/setup-python@v6
@@ -25,3 +25,13 @@ jobs:
       - run: go build -p 2 -o scratch/hotstuff.exe ./cmd/hotstuff
       - run: go build -p 2 -o scratch/campaign.exe ./cmd/campaign
       - run: python tools/verify.py --hotstuff scratch/hotstuff.exe --campaign scratch/campaign.exe --output scratch/proof
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: consensus-verification
+          path: |
+            scratch/proof/summary.json
+            scratch/proof/campaign/results.json
+            scratch/proof/campaign/scenarios.json
+            scratch/proof/replay/results.json
+            scratch/driver-controls/*.json

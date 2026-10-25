@@ -16,6 +16,604 @@ This adaptation is inspired by Stanford CS244b's [HotStuff capstone report](http
 
 ## Architecture and execution guide
 
+<!-- execution-flow:start -->
+### Execution flow
+
+Start with the primary path, then expand a detailed workflow. Select a numbered node to see its operation, implementation techniques, and source. Solid arrows show the named control, data, or lifecycle handoff; dotted arrows show error paths. Separate entry points are named in each workflow.
+
+<a id="review-walkthrough"></a>
+
+#### Walk through one concrete example
+
+A replica receives a correctly signed proposal for the next view whose QC and linked ancestors are available locally.
+
+**Trace.** [Build and send a leader proposal](#flow-step-proposal) → [Apply the three-chain commit rule](#flow-step-commit) → [Sign and route a vote](#flow-step-vote) → [Verify votes and form QC](#flow-step-votes) → [Verify sync info and advance one view](#flow-step-advance) → [Select the next leader action](#flow-step-newview).
+
+**Result and boundary.** The replica attempts the three-chain commit, signs and routes its vote, and advances when it receives a quorum certificate. Committing requires linked consecutive-view ancestors; missing ancestors return an error, and the flow does not promise general recovery.
+
+<details>
+<summary>Implementation decisions to explain</summary>
+
+**Why commit from a three-chain of certified blocks instead of committing every valid proposal?** The rule commits an ancestor only after the required chain of linked certificates, giving the protocol an explicit safety condition. The tradeoff is that a missing ancestor blocks that commit attempt even while the replica can continue voting.
+
+[Three-chain certified commit rule](#technique-three-chain-certified-commit) · [Distinct-signer quorum certificate validation](#technique-quorum-certificate-validation).
+
+</details>
+
+#### Primary execution flow
+
+Campaign generation or saved replay runs bounded Twins consensus and checks honest commit prefixes. The native local CLI has an independent entrypoint.
+
+```mermaid
+flowchart TD
+    n1["1. Validate campaign inputs"]
+    click n1 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-campaign" "Open step, techniques, and source" _top
+    n2["2. Generate seeded scenarios"]
+    click n2 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-generate" "Open step, techniques, and source" _top
+    n3["3. Create simulated Twins<br/>participants"]
+    click n3 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-simulate" "Open step, techniques, and source" _top
+    n4["4. Deliver due messages and<br/>drain nodes"]
+    click n4 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-tick" "Open step, techniques, and source" _top
+    n6["6. Collect simulated commit<br/>histories"]
+    click n6 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-collect" "Open step, techniques, and source" _top
+    n7["7. Check honest prefixes and<br/>progress"]
+    click n7 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-oracle" "Open step, techniques, and source" _top
+    n8["8. Save campaign verdict"]
+    click n8 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-save" "Open step, techniques, and source" _top
+    n1 -->|"without replay"| n2
+    n1 -->|"validated replay case"| n3
+    n2 -->|"validate generated cases then<br/>ExecuteScenario"| n3
+    n3 -->|"run constructed simulated network"| n4
+    n4 -->|"bounded run returns"| n6
+    n6 -->|"filter honest histories and Check"| n7
+    n7 -->|"record verdict and evidence"| n8
+    n3 -->|"creation error returned"| n8
+    n6 -.->|"execution error skips the oracle"| n8
+```
+
+**Detailed workflows.** [Twins delivery and event dispatch](#flow-workflow-simulated-network) · [Proposal, vote, QC, and commit](#flow-workflow-chained-consensus) · [Certificate checks and timeout advancement](#flow-workflow-certificates-timeouts) · [Independent local RPC and client execution](#flow-workflow-local-rpc-client).
+
+<a id="flow-workflow-simulated-network"></a>
+
+<details>
+<summary>Twins delivery and event dispatch</summary>
+
+Verification simulation queues messages and drains node event loops. It does not start the local RPC CLI.
+
+```mermaid
+flowchart TD
+    n4["4. Deliver due messages and<br/>drain nodes"]
+    click n4 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-tick" "Open step, techniques, and source" _top
+    n10["10. Build and send a leader<br/>proposal"]
+    click n10 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-proposal" "Open step, techniques, and source" _top
+    n5["5. Apply sender-view partitions"]
+    click n5 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-partition" "Open step, techniques, and source" _top
+    n9["9. Dispatch queued replica<br/>events"]
+    click n9 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-dispatch" "Open step, techniques, and source" _top
+    n11["11. Admit an incoming proposal"]
+    click n11 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-receive" "Open step, techniques, and source" _top
+    n18["18. Create or resend a local<br/>timeout"]
+    click n18 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-timeout" "Open step, techniques, and source" _top
+    n15["15. Verify votes and form QC"]
+    click n15 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-votes" "Open step, techniques, and source" _top
+    n4 -->|"initial leader creates and proposes"| n10
+    n10 -->|"Clique broadcasts via emulated sender"| n5
+    n5 -->|"accepted message enters pending queue"| n4
+    n4 -->|"deliver events and drain node queues"| n9
+    n9 -->|"registered proposal handler"| n11
+    n9 -->|"tick countdown queues TimeoutEvent"| n18
+    n9 -->|"registered VoteMsg handler"| n15
+```
+
+</details>
+
+<a id="flow-workflow-chained-consensus"></a>
+
+<details>
+<summary>Proposal, vote, QC, and commit</summary>
+
+Shared chained protocol. Incoming proposals attempt commit before signing; outgoing proposals sign before commit. Errors stop their current attempt.
+
+```mermaid
+flowchart TD
+    n11["11. Admit an incoming proposal"]
+    click n11 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-receive" "Open step, techniques, and source" _top
+    n16["16. Verify sync info and advance<br/>one view"]
+    click n16 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-advance" "Open step, techniques, and source" _top
+    n12["12. Verify vote eligibility and<br/>QC"]
+    click n12 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-verify-proposal" "Open step, techniques, and source" _top
+    n24["24. Stop the current protocol<br/>attempt"]
+    click n24 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-reject" "Open step, techniques, and source" _top
+    n20["20. Validate certificate<br/>structure"]
+    click n20 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-qc" "Open step, techniques, and source" _top
+    n13["13. Apply the three-chain commit<br/>rule"]
+    click n13 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-commit" "Open step, techniques, and source" _top
+    n14["14. Sign and route a vote"]
+    click n14 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-vote" "Open step, techniques, and source" _top
+    n10["10. Build and send a leader<br/>proposal"]
+    click n10 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-proposal" "Open step, techniques, and source" _top
+    n15["15. Verify votes and form QC"]
+    click n15 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-votes" "Open step, techniques, and source" _top
+    n23["23. Fetch a missing block"]
+    click n23 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-fetch" "Open step, techniques, and source" _top
+    n17["17. Select the next leader<br/>action"]
+    click n17 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-newview" "Open step, techniques, and source" _top
+    n11 -->|"advance before drift and eligibility<br/>checks"| n16
+    n11 -->|"proposal is not a future view"| n12
+    n11 -->|"future drift at most ten waits for<br/>ViewChangeEvent"| n11
+    n11 -->|"drift greater than ten"| n24
+    n12 -->|"verify proposal certificates"| n20
+    n12 -->|"old, unsafe, wrong leader, or invalid<br/>QC"| n24
+    n12 -->|"valid incoming proposal calls<br/>OnValidPropose"| n13
+    n13 -->|"incoming commit attempt precedes vote<br/>even on error"| n14
+    n10 -->|"self vote signed before commit attempt"| n13
+    n10 -->|"verification, signing, commit, or<br/>dissemination error"| n24
+    n14 -->|"next leader collects or receives vote"| n15
+    n15 -->|"deferred vote still lacks block"| n23
+    n15 -->|"QC enqueues NewViewMsg"| n16
+    n15 -->|"invalid signature or duplicate vote<br/>ends attempt"| n24
+    n16 -->|"valid certificate view is not behind<br/>current view"| n17
+    n16 -->|"invalid sync info or old certificate<br/>view"| n24
+    n17 -->|"this replica is the new leader"| n10
+    n17 -->|"remote leader handles NewView sync<br/>info"| n16
+```
+
+</details>
+
+<a id="flow-workflow-certificates-timeouts"></a>
+
+<details>
+<summary>Certificate checks and timeout advancement</summary>
+
+Shared cache, ECDSA, fetch, and pacemaker calls. Cache hits return to callers. Timeout collection follows the retained slice implementation without a general liveness guarantee.
+
+```mermaid
+flowchart TD
+    n20["20. Validate certificate<br/>structure"]
+    click n20 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-qc" "Open step, techniques, and source" _top
+    n23["23. Fetch a missing block"]
+    click n23 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-fetch" "Open step, techniques, and source" _top
+    n21["21. Check the bounded signature<br/>cache"]
+    click n21 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-cache" "Open step, techniques, and source" _top
+    n22["22. Verify or combine ECDSA<br/>signatures"]
+    click n22 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-ecdsa" "Open step, techniques, and source" _top
+    n24["24. Stop the current protocol<br/>attempt"]
+    click n24 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-reject" "Open step, techniques, and source" _top
+    n18["18. Create or resend a local<br/>timeout"]
+    click n18 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-timeout" "Open step, techniques, and source" _top
+    n19["19. Collect signed timeout<br/>messages"]
+    click n19 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-remote-timeout" "Open step, techniques, and source" _top
+    n16["16. Verify sync info and advance<br/>one view"]
+    click n16 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-advance" "Open step, techniques, and source" _top
+    n20 -->|"retrieve certified block"| n23
+    n20 -->|"structurally valid QC invokes Verify"| n21
+    n21 -->|"cache miss verifies underlying<br/>signature"| n22
+    n21 -->|"nil signature or underlying error"| n24
+    n22 -->|"unknown signer, invalid signature, or<br/>incompatible type"| n24
+    n23 -->|"fetch and final local recheck fail"| n24
+    n18 -->|"new timeout broadcast then processed<br/>locally"| n19
+    n18 -->|"later same-view timeout retransmits"| n18
+    n19 -->|"verify view signature before<br/>collection"| n21
+    n19 -->|"embedded sync info and later quorum TC"| n16
+    n16 -->|"simple ruler verifies TC and QC"| n20
+    n19 -->|"invalid signature, insufficient<br/>timeouts, or combine failure"| n24
+```
+
+</details>
+
+<a id="flow-workflow-local-rpc-client"></a>
+
+<details>
+<summary>Independent local RPC and client execution</summary>
+
+The documented native journey uses a worker and replica goroutines in one process. Shared consensus appears in its own detailed workflow.
+
+```mermaid
+flowchart TD
+    n25["25. Start the independent local<br/>CLI worker"]
+    click n25 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-local" "Open step, techniques, and source" _top
+    n26["26. Create replica servers and<br/>sockets"]
+    click n26 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-servers" "Open step, techniques, and source" _top
+    n27["27. Connect and run replica<br/>goroutines"]
+    click n27 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-run-replicas" "Open step, techniques, and source" _top
+    n28["28. Receive consensus RPC events"]
+    click n28 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-rpc" "Open step, techniques, and source" _top
+    n29["29. Send numbered client<br/>commands"]
+    click n29 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-client" "Open step, techniques, and source" _top
+    n30["30. Wait for committed command<br/>execution"]
+    click n30 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-admit-command" "Open step, techniques, and source" _top
+    n10["10. Build and send a leader<br/>proposal"]
+    click n10 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-proposal" "Open step, techniques, and source" _top
+    n9["9. Dispatch queued replica<br/>events"]
+    click n9 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-dispatch" "Open step, techniques, and source" _top
+    n13["13. Apply the three-chain commit<br/>rule"]
+    click n13 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-commit" "Open step, techniques, and source" _top
+    n31["31. Execute or reject duplicate<br/>commands"]
+    click n31 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-execute" "Open step, techniques, and source" _top
+    n32["32. Complete the client reply<br/>quorum"]
+    click n32 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-reply" "Open step, techniques, and source" _top
+    n33["33. Stop clients and inspect<br/>replica results"]
+    click n33 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-shutdown" "Open step, techniques, and source" _top
+    n24["24. Stop the current protocol<br/>attempt"]
+    click n24 href "https://github.com/STEVVVU/hotstuff-consensus-engine#flow-step-reject" "Open step, techniques, and source" _top
+    n25 -->|"Experiment.Run requests replica<br/>creation"| n26
+    n26 -->|"controller starts created replicas"| n27
+    n26 -->|"createReplicas starts listeners before<br/>returning ports"| n28
+    n27 -->|"controller starts clients after<br/>replicas"| n29
+    n29 -->|"asynchronous ExecCommand RPC"| n30
+    n30 -->|"cache supplies leader batch"| n10
+    n28 -->|"decoded message enters event queue"| n9
+    n13 -->|"ExecuteEvent registered to<br/>ClientIO.Exec"| n31
+    n31 -->|"completeCommand unblocks RPC response"| n32
+    n29 -->|"promise waits for quorum or error"| n32
+    n29 -->|"configured duration expires"| n33
+    n33 -->|"stop or comparison error"| n24
+```
+
+</details>
+
+#### Steps, techniques, and source
+
+These source traces cover the active scope below. They explain implementation behavior; benchmark results and their limits remain in the measurement sections.
+
+<a id="flow-step-campaign"></a>
+
+##### 1. Validate campaign inputs
+
+**Component.** cmd/campaign. Require a fresh output directory and write passed=false first. Replay accepts at most 2 MiB and 1..69 cases; each case validates identities, partitions, leaders, and scenario bounds before execution.
+
+**Techniques at this step.** [Bounded exact scenario replay](#technique-bounded-exact-scenario-replay).
+
+**Source.** [`cmd/campaign/main.go:33`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/cmd/campaign/main.go#L33). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-generate"></a>
+
+##### 2. Generate seeded scenarios
+
+**Component.** twins.Generator. Without replay, append five controlled cases and shuffle a four-replica, one-twin partition generator with the requested seed. NextScenario advances a bounded Cartesian enumeration, with seeded offsets.
+
+**Techniques at this step.** [Seeded partition scenario generation](#technique-seeded-partition-scenario-generation).
+
+**Source.** [`twins/generator.go:111`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/twins/generator.go#L111). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-simulate"></a>
+
+##### 3. Create simulated Twins participants
+
+**Component.** twins.Network. ExecuteScenario selects chained HotStuff and 300 ticks. Distinct network NodeIDs sharing a ReplicaID reuse a private key; each node has its own protocol state, synchronous vote verification, 100-entry certificate cache, and preloaded commands.
+
+**Techniques at this step.** [Shared-key twin equivocation simulation](#technique-shared-key-twin-equivocation) · [Bounded exact scenario replay](#technique-bounded-exact-scenario-replay).
+
+**Source.** [`twins/network.go:119`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/twins/network.go#L119) · [`twins/node.go:45`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/twins/node.go#L45). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-tick"></a>
+
+##### 4. Deliver due messages and drain nodes
+
+**Component.** twins.Network. Kick off initial leader proposals. Each tick first delivers pending messages whose effective view is no greater than globalView, then adds a tick event and drains each node queue. If nothing was delivered globalView increments; execution stops at the tick bound or network error.
+
+**Techniques at this step.** [Discrete-time event simulation](#technique-discrete-time-event-simulation).
+
+**Source.** [`twins/network.go:181`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/twins/network.go#L181). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-partition"></a>
+
+##### 5. Apply sender-view partitions
+
+**Component.** twins.emulatedSender. For each destination twin, use the sender's effective view to drop configured message types across partitions or queue a message for a later tick. ExecuteScenario includes proposals, votes, block hashes, NewView messages, and timeout messages in dropTypes, despite its stale comment.
+
+**Techniques at this step.** [View-indexed message partitioning](#technique-view-indexed-message-partitioning).
+
+**Source.** [`twins/sender.go:41`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/twins/sender.go#L41) · [`twins/scenario.go:57`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/twins/scenario.go#L57). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-collect"></a>
+
+##### 6. Collect simulated commit histories
+
+**Component.** twins.ExecuteScenario. CommitEvent handlers append executed blocks per node. After the bounded run, collect histories, public-key fingerprints, and network logs and run the inherited commit comparison.
+
+**Techniques at this step.** [Honest-prefix agreement and nonvacuous progress checks](#technique-honest-prefix-agreement-and-nonvacuous-progress).
+
+**Source.** [`twins/scenario.go:73`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/twins/scenario.go#L73). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-oracle"></a>
+
+##### 7. Check honest prefixes and progress
+
+**Component.** workbench.Check. Exclude twins and the configured faulty identity. Require minimum commits where configured, increasing views, at least three QC participants when QCView is nonzero, and matching hashes at every overlapping index. The no-quorum case additionally rejects any commit.
+
+**Techniques at this step.** [Honest-prefix agreement and nonvacuous progress checks](#technique-honest-prefix-agreement-and-nonvacuous-progress).
+
+**Source.** [`workbench/oracle.go:13`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/workbench/oracle.go#L13). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-save"></a>
+
+##### 8. Save campaign verdict
+
+**Component.** cmd/campaign. Write each network log and results.json. Any execution or oracle error sets passed=false and exits 1; only successful completion replaces status.json with passed=true. Input and file errors panic.
+
+**Techniques at this step.** [Bounded exact scenario replay](#technique-bounded-exact-scenario-replay).
+
+**Source.** [`cmd/campaign/main.go:112`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/cmd/campaign/main.go#L112). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-dispatch"></a>
+
+##### 9. Dispatch queued replica events
+
+**Component.** core/eventloop. AddEvent executes explicitly opted-in immediate handlers and pushes to a bounded circular queue that drops its oldest entry when full. Tick or Run dispatches priority handlers before ordinary handlers and then releases events delayed on that event type.
+
+**Techniques at this step.** [Serialized event dispatch with a bounded drop-oldest queue](#technique-serialized-event-dispatch-with-bounded-drop-oldest-queue).
+
+**Source.** [`core/eventloop/eventloop.go:213`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/core/eventloop/eventloop.go#L213) · [`core/eventloop/queue.go:30`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/core/eventloop/queue.go#L30). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-proposal"></a>
+
+##### 10. Build and send a leader proposal
+
+**Component.** consensus.Proposer. CreateProposal marks certified commands proposed and waits for a batch under the timeout context. The chained rule requires a QC. Propose verifies, signs its own vote, attempts commit, then disseminates; any failure returns before later operations.
+
+**Techniques at this step.** [ECDSA partial signatures and quorum aggregation](#technique-signed-quorum-certificate-aggregation) · [One-to-all proposals and votes to the next leader](#technique-one-to-all-vote-to-next-leader-dissemination).
+
+**Source.** [`protocol/consensus/proposer.go:79`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/consensus/proposer.go#L79). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-receive"></a>
+
+##### 11. Admit an incoming proposal
+
+**Component.** synchronizer.Synchronizer. First attempt advanceView using the proposal QC. Drop proposals more than ten views ahead, delay smaller future drift until ViewChangeEvent, and verify the proposal before OnValidPropose.
+
+**Techniques at this step.** [Distinct-signer quorum certificate validation](#technique-quorum-certificate-validation).
+
+**Source.** [`protocol/synchronizer/synchronizer.go:96`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/synchronizer/synchronizer.go#L96). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-verify-proposal"></a>
+
+##### 12. Verify vote eligibility and QC
+
+**Component.** consensus.Voter. Reject a view no newer than lastVotedView. The chained rule requires a QC above the lock or extension of the lock, then VerifyAnyQC validates the QC and the voter checks the expected leader.
+
+**Techniques at this step.** [Three-chain certified commit rule](#technique-three-chain-certified-commit) · [Distinct-signer quorum certificate validation](#technique-quorum-certificate-validation).
+
+**Source.** [`protocol/consensus/voter.go:96`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/consensus/voter.go#L96) · [`protocol/rules/chainedhotstuff.go:87`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/rules/chainedhotstuff.go#L87). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-commit"></a>
+
+##### 13. Apply the three-chain commit rule
+
+**Component.** consensus.Committer. Store the proposal, follow three QC references, update the lock at the second, and require linked parents with consecutive views before selecting the third ancestor. Recursively commit ancestors first, enqueue CommitEvent and ExecuteEvent before publishing CommittedBlock, and emit AbortEvent for pruned forks. Missing ancestors return errors.
+
+**Techniques at this step.** [Three-chain certified commit rule](#technique-three-chain-certified-commit).
+
+**Source.** [`protocol/consensus/committer.go:44`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/consensus/committer.go#L44) · [`protocol/rules/chainedhotstuff.go:48`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/rules/chainedhotstuff.go#L48). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-vote"></a>
+
+##### 14. Sign and route a vote
+
+**Component.** consensus.Voter and comm.Clique. For incoming valid proposals, attempt commit before signing and still vote if commit failed. Update lastVotedView only after signing. Clique sends the vote to the next leader or collects locally when this replica is that leader; proposals broadcast before the proposer's vote is aggregated.
+
+**Techniques at this step.** [ECDSA partial signatures and quorum aggregation](#technique-signed-quorum-certificate-aggregation) · [One-to-all proposals and votes to the next leader](#technique-one-to-all-vote-to-next-leader-dissemination).
+
+**Source.** [`protocol/consensus/voter.go:52`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/consensus/voter.go#L52). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-votes"></a>
+
+##### 15. Verify votes and form QC
+
+**Component.** votingmachine.VotingMachine. Defer a vote with a local block miss until a proposal arrives, then fetch if still missing. Reject old blocks and invalid or duplicate signers. At quorum, combine partial signatures and enqueue NewViewMsg with the QC; verification runs inline for Twins and can run in a goroutine for native replicas.
+
+**Techniques at this step.** [ECDSA partial signatures and quorum aggregation](#technique-signed-quorum-certificate-aggregation) · [Distinct-signer quorum certificate validation](#technique-quorum-certificate-validation).
+
+**Source.** [`protocol/votingmachine/votingmachine.go:90`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/votingmachine/votingmachine.go#L90). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-advance"></a>
+
+##### 16. Verify sync info and advance one view
+
+**Component.** synchronizer.Synchronizer. Verify TC and QC, prefer QC when its view is at least TC's, and attempt HighQC update. Return for certificate views below the current view. Otherwise stop the timer, increment the local view once with NextView, reset timeout state, restart the timer, and enqueue ViewChangeEvent.
+
+**Techniques at this step.** [Timeout-certificate view advancement](#technique-timeout-certificate-view-advancement).
+
+**Source.** [`protocol/synchronizer/synchronizer.go:250`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/synchronizer/synchronizer.go#L250) · [`protocol/viewstates.go:92`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/viewstates.go#L92). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-newview"></a>
+
+##### 17. Select the next leader action
+
+**Component.** synchronizer.Synchronizer. After advancing, create and send a proposal if this replica is leader. Otherwise send NewView to the selected leader. Proposal construction, dissemination, and missing destination errors are logged without an invented retry.
+
+**Techniques at this step.** [One-to-all proposals and votes to the next leader](#technique-one-to-all-vote-to-next-leader-dissemination).
+
+**Source.** [`protocol/synchronizer/synchronizer.go:293`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/synchronizer/synchronizer.go#L293). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-timeout"></a>
+
+##### 18. Create or resend a local timeout
+
+**Component.** synchronizer.Synchronizer. Twins countdown emits TimeoutEvent every five ticks and raises effectiveView; native Start uses a one-shot wall-clock timer. A current-view timeout restarts the timer, resends an existing timeout or signs a new one, stops voting, broadcasts, and handles its own new timeout locally.
+
+**Techniques at this step.** [Timeout-certificate view advancement](#technique-timeout-certificate-view-advancement) · [Discrete-time event simulation](#technique-discrete-time-event-simulation).
+
+**Source.** [`protocol/synchronizer/synchronizer.go:182`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/synchronizer/synchronizer.go#L182). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-remote-timeout"></a>
+
+##### 19. Collect signed timeout messages
+
+**Component.** synchronizer.Synchronizer. Reject invalid view signatures, attempt advancement from embedded sync info, then add the timeout. The collector rejects a duplicate ID and view, but tests the total retained slice length for quorum and returns a clone before removing entries for the triggering view. The simple rule combines a TC and advances again with HighQC.
+
+**Techniques at this step.** [Timeout-certificate view advancement](#technique-timeout-certificate-view-advancement).
+
+**Source.** [`protocol/synchronizer/synchronizer.go:209`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/synchronizer/synchronizer.go#L209) · [`protocol/synchronizer/timeout_collector.go:22`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/synchronizer/timeout_collector.go#L22). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-qc"></a>
+
+##### 20. Validate certificate structure
+
+**Component.** cert.Authority. Genesis QC requires view zero. Other QCs require a nonnil signature, distinct participant quorum, a retrievable block, and matching QC and block views before cryptographic verification. Nonzero TCs require a nonnil distinct quorum signature over view bytes.
+
+**Techniques at this step.** [Distinct-signer quorum certificate validation](#technique-quorum-certificate-validation).
+
+**Source.** [`security/cert/auth.go:116`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/security/cert/auth.go#L116). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-cache"></a>
+
+##### 21. Check the bounded signature cache
+
+**Component.** cert.Cache. Key verification by message digest, signature bytes, and participant IDs. Hits update recency; misses invoke underlying verification and insert only success. Insertion evicts the least recently used entry at capacity. Combine is not cached.
+
+**Techniques at this step.** [Bounded certificate verification cache](#technique-bounded-certificate-verification-cache).
+
+**Source.** [`security/cert/cache.go:73`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/security/cert/cache.go#L73). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-ecdsa"></a>
+
+##### 22. Verify or combine ECDSA signatures
+
+**Component.** crypto.ECDSA. Sign hashes the message and uses ECDSA ASN.1 with the replica identity. Combine rejects overlapping signers and incompatible types. Verify checks each signer against configured public keys in goroutines and joins their errors.
+
+**Techniques at this step.** [ECDSA partial signatures and quorum aggregation](#technique-signed-quorum-certificate-aggregation).
+
+**Source.** [`security/crypto/ecdsa.go:96`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/security/crypto/ecdsa.go#L96). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-fetch"></a>
+
+##### 23. Fetch a missing block
+
+**Component.** blockchain.Blockchain. Get checks local storage, then requests a block under TimeoutContext while releasing its mutex. A concurrent Store cancels a pending fetch; on fetch failure Get checks local storage again. Twins searches reachable nodes directly; native RequestBlock accepts a reply only when its hash matches.
+
+**Techniques at this step.** [View-indexed message partitioning](#technique-view-indexed-message-partitioning).
+
+**Source.** [`security/blockchain/blockchain.go:99`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/security/blockchain/blockchain.go#L99) · [`twins/sender.go:117`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/twins/sender.go#L117) · [`network/sender.go:264`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/network/sender.go#L264). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-reject"></a>
+
+##### 24. Stop the current protocol attempt
+
+**Component.** protocol consensus and synchronizer. Invalid proposals, signatures, stale certificates, unavailable blocks, and failed signing or aggregation end the corresponding attempt or remain logged as specified by each caller. A failed incoming commit is accumulated while voting continues. No general recovery guarantee follows.
+
+This handoff carries inputs, outputs, or failure state for the protocol operations described in adjacent steps.
+
+**Source.** [`protocol/consensus/voter.go:52`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/protocol/consensus/voter.go#L52). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-local"></a>
+
+##### 25. Start the independent local CLI worker
+
+**Component.** internal/cli. With no remote hosts, runSingleExperiment creates a local worker goroutine over net.Pipe and invokes Experiment.Run. This path does not dispatch the campaign or Twins simulator.
+
+**Techniques at this step.** [Loopback RPC replica execution](#technique-loopback-rpc-replica-execution).
+
+**Source.** [`internal/cli/run.go:135`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/internal/cli/run.go#L135). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-servers"></a>
+
+##### 26. Create replica servers and sockets
+
+**Component.** orchestration.Worker. CreateReplica requests parse keys, configure ECDSA, security cache, chained rules, Clique and the pacemaker for this documented journey. Start replica and client RPC servers on ephemeral TCP listeners; listener, configuration, and key errors return through worker responses.
+
+**Techniques at this step.** [Loopback RPC replica execution](#technique-loopback-rpc-replica-execution).
+
+**Source.** [`internal/orchestration/worker.go:109`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/internal/orchestration/worker.go#L109). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-run-replicas"></a>
+
+##### 27. Connect and run replica goroutines
+
+**Component.** replica.Replica. The worker connects replica configurations before deferred starts. Replica.Start launches Run in a goroutine; Run starts the synchronizer then its event loop. Local replicas share one operating-system process and use loopback RPC addresses.
+
+**Techniques at this step.** [Loopback RPC replica execution](#technique-loopback-rpc-replica-execution).
+
+**Source.** [`replica/replica.go:136`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/replica/replica.go#L136). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-rpc"></a>
+
+##### 28. Receive consensus RPC events
+
+**Component.** server.serviceImpl. GorumsSender sends proposals and targeted votes or NewView messages. Server methods derive peer identity, decode protobuf messages, apply configured delay, and enqueue protocol events. Block fetch requests answer from local storage or return NotFound.
+
+**Techniques at this step.** [Loopback RPC replica execution](#technique-loopback-rpc-replica-execution) · [One-to-all proposals and votes to the next leader](#technique-one-to-all-vote-to-next-leader-dissemination).
+
+**Source.** [`server/server.go:116`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/server/server.go#L116). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-client"></a>
+
+##### 29. Send numbered client commands
+
+**Component.** client.Client. The worker connects and starts clients after replicas. sendCommands rate-limits input, assigns increasing sequence numbers, issues asynchronous ExecCommand with a timeout, and queues promises. EOF sends empty commands until the tracked final sequence completes.
+
+**Techniques at this step.** [f+1 client reply quorum](#technique-f-plus-one-client-reply-quorum) · [Per-client monotone sequence deduplication](#technique-per-client-monotone-sequence-deduplication).
+
+**Source.** [`client/client.go:198`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/client/client.go#L198). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-admit-command"></a>
+
+##### 30. Wait for committed command execution
+
+**Component.** server.ClientIO. ExecCommand stores a waiter by message ID, adds the command to the cache, releases the Gorums context, and waits on the completion channel. A leader's CreateProposal consumes batches from that cache.
+
+**Techniques at this step.** [Per-client monotone sequence deduplication](#technique-per-client-monotone-sequence-deduplication).
+
+**Source.** [`server/clientio.go:79`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/server/clientio.go#L79). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-execute"></a>
+
+##### 31. Execute or reject duplicate commands
+
+**Component.** server.ClientIO. ExecuteEvent invokes Exec. Under the mutex, reject a sequence no greater than that client's highest executed sequence with Aborted. Otherwise advance the sequence, hash command data, increment the count, and complete its waiter. AbortEvent completes forked commands with Aborted.
+
+**Techniques at this step.** [Per-client monotone sequence deduplication](#technique-per-client-monotone-sequence-deduplication).
+
+**Source.** [`server/clientio.go:93`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/server/clientio.go#L93). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-reply"></a>
+
+##### 32. Complete the client reply quorum
+
+**Component.** client.qspec. ExecCommandQF accepts replies from f+1 distinct reply-map entries. handleCommands waits on promises and records finished, failed, timed-out, or canceled outcomes. This client threshold is separate from the replica consensus quorum.
+
+**Techniques at this step.** [f+1 client reply quorum](#technique-f-plus-one-client-reply-quorum).
+
+**Source.** [`client/client.go:34`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/client/client.go#L34). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-shutdown"></a>
+
+##### 33. Stop clients and inspect replica results
+
+**Component.** orchestration.Experiment. After the configured duration, stop clients, wait five initial timeouts, stop replicas, and log counts and hashes. The controller compares hashes only within equal-count groups; the verification driver imposes the stronger identical nonzero count check. Replica.Stop cancels, waits for Run, and closes connections and servers.
+
+**Techniques at this step.** [Loopback RPC replica execution](#technique-loopback-rpc-replica-execution).
+
+**Source.** [`internal/orchestration/controller.go:69`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/internal/orchestration/controller.go#L69) · [`internal/orchestration/controller.go:234`](https://github.com/STEVVVU/hotstuff-consensus-engine/blob/main/internal/orchestration/controller.go#L234). [Back to execution flow](#execution-flow).
+
+<details>
+<summary>Scope and subsystem coverage</summary>
+
+Active local campaign CLI and its seeded or saved Twins scenarios, consensus/certificate/pacemaker/security/network modules invoked by that campaign, the documented local CLI/replica/client loopback journey, and the campaign's honest-prefix oracle.
+
+- **Campaign generation, validation, and replay.** These mapped operations and workflow handoffs cover the active campaign or documented local CLI implementation of this subsystem. [Step 1](#flow-step-campaign), [Step 2](#flow-step-generate), [Step 3](#flow-step-simulate), [Step 8](#flow-step-save).
+- **Twins network and adversarial identities.** These mapped operations and workflow handoffs cover the active campaign or documented local CLI implementation of this subsystem. [Step 3](#flow-step-simulate), [Step 4](#flow-step-tick), [Step 5](#flow-step-partition), [Step 18](#flow-step-timeout).
+- **Chained consensus and commit path.** These mapped operations and workflow handoffs cover the active campaign or documented local CLI implementation of this subsystem. [Step 10](#flow-step-proposal), [Step 11](#flow-step-receive), [Step 12](#flow-step-verify-proposal), [Step 13](#flow-step-commit), [Step 14](#flow-step-vote), [Step 15](#flow-step-votes), [Step 20](#flow-step-qc).
+- **Pacemaker and timeout certificates.** These mapped operations and workflow handoffs cover the active campaign or documented local CLI implementation of this subsystem. [Step 18](#flow-step-timeout), [Step 19](#flow-step-remote-timeout), [Step 16](#flow-step-advance), [Step 17](#flow-step-newview).
+- **Replica signatures and network dissemination.** These mapped operations and workflow handoffs cover the active campaign or documented local CLI implementation of this subsystem. [Step 20](#flow-step-qc), [Step 21](#flow-step-cache), [Step 22](#flow-step-ecdsa), [Step 14](#flow-step-vote), [Step 15](#flow-step-votes), [Step 25](#flow-step-local), [Step 26](#flow-step-servers), [Step 27](#flow-step-run-replicas), [Step 28](#flow-step-rpc), [Step 23](#flow-step-fetch).
+- **Replica event processing.** These mapped operations and workflow handoffs cover the active campaign or documented local CLI implementation of this subsystem. [Step 9](#flow-step-dispatch).
+- **Client reply and duplicate handling.** These mapped operations and workflow handoffs cover the active campaign or documented local CLI implementation of this subsystem. [Step 29](#flow-step-client), [Step 30](#flow-step-admit-command), [Step 31](#flow-step-execute), [Step 32](#flow-step-reply).
+- **Agreement and progress oracle.** These mapped operations and workflow handoffs cover the active campaign or documented local CLI implementation of this subsystem. [Step 6](#flow-step-collect), [Step 7](#flow-step-oracle), [Step 8](#flow-step-save).
+
+Outside this flow audit:
+
+- `protocol/rules/fasthotstuff.go, protocol/rules/simplehotstuff.go, protocol/rules/byzantine/`. These variants and Byzantine modules are preserved but the active campaign constructs only chained HotStuff rules.
+- `protocol/comm/kauri/, internal/tree/`. The documented local journey selects the Clique one-to-all communication mode; the Kauri tree path is not used by this run.
+- `cmd/latencygen/, cmd/plot/, docs/README.upstream.md`. Data and visualization utilities and the preserved upstream guide are outside the active campaign and local journey mechanisms audited here.
+- `docs/benchmark-results.md, .agents/skills/verify-hotstuff/features/benchmark.md`. Native load/profiling is a separate benchmark journey and is not the campaign or basic loopback client path covered by this techniques section.
+
+</details>
+
+<!-- execution-flow:end -->
+
+<details>
+<summary>Subsystem technique index</summary>
+
 ### Subsystem map
 
 Select a subsystem in the diagram to open its techniques, tradeoffs, and code references. The numbered links provide the same navigation. This map groups components; the execution diagrams show their runtime flow.
@@ -53,6 +651,8 @@ flowchart LR
 The inherited `relab/hotstuff` framework implements consensus protocols, cryptography, Gorums networking, leader rotation, clients, and the Twins simulator. This repository adds a bounded campaign, evidence oracle, exact scenario replay, and local product driver. Twins replicas are simulated participants; the network journey uses four replica goroutines and loopback sockets inside one process.
 
 This boundary map separates the actual product paths used by the verification driver.
+
+</details>
 
 <details>
 <summary>Expand flow diagram 1</summary>

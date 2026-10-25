@@ -16,9 +16,46 @@ This adaptation is inspired by Stanford CS244b's [HotStuff capstone report](http
 
 ## Architecture and execution guide
 
+### Subsystem map
+
+Select a subsystem in the diagram to open its techniques, tradeoffs, and code references. The numbered links provide the same navigation. This map groups components; the execution diagrams show their runtime flow.
+
+```mermaid
+flowchart LR
+    system["HotStuff consensus<br/>engine"]
+    system --> s1["1. Campaign generation,<br/>validation, and replay"]
+    click s1 href "https://github.com/STEVVVU/hotstuff-consensus-engine#subsystem-campaign-generation-validation-and-replay" "Explore Campaign generation, validation, and replay" _top
+    system --> s2["2. Twins network and adversarial<br/>identities"]
+    click s2 href "https://github.com/STEVVVU/hotstuff-consensus-engine#subsystem-twins-network-and-adversarial-identities" "Explore Twins network and adversarial identities" _top
+    system --> s3["3. Chained consensus and commit<br/>path"]
+    click s3 href "https://github.com/STEVVVU/hotstuff-consensus-engine#subsystem-chained-consensus-and-commit-path" "Explore Chained consensus and commit path" _top
+    system --> s4["4. Pacemaker and timeout<br/>certificates"]
+    click s4 href "https://github.com/STEVVVU/hotstuff-consensus-engine#subsystem-pacemaker-and-timeout-certificates" "Explore Pacemaker and timeout certificates" _top
+    system --> s5["5. Replica signatures and network<br/>dissemination"]
+    click s5 href "https://github.com/STEVVVU/hotstuff-consensus-engine#subsystem-replica-signatures-and-network-dissemination" "Explore Replica signatures and network dissemination" _top
+    system --> s6["6. Replica event processing"]
+    click s6 href "https://github.com/STEVVVU/hotstuff-consensus-engine#subsystem-replica-event-processing" "Explore Replica event processing" _top
+    system --> s7["7. Client reply and duplicate<br/>handling"]
+    click s7 href "https://github.com/STEVVVU/hotstuff-consensus-engine#subsystem-client-reply-and-duplicate-handling" "Explore Client reply and duplicate handling" _top
+    system --> s8["8. Agreement and progress oracle"]
+    click s8 href "https://github.com/STEVVVU/hotstuff-consensus-engine#subsystem-agreement-and-progress-oracle" "Explore Agreement and progress oracle" _top
+```
+
+1. [Campaign generation, validation, and replay](#subsystem-campaign-generation-validation-and-replay)
+2. [Twins network and adversarial identities](#subsystem-twins-network-and-adversarial-identities)
+3. [Chained consensus and commit path](#subsystem-chained-consensus-and-commit-path)
+4. [Pacemaker and timeout certificates](#subsystem-pacemaker-and-timeout-certificates)
+5. [Replica signatures and network dissemination](#subsystem-replica-signatures-and-network-dissemination)
+6. [Replica event processing](#subsystem-replica-event-processing)
+7. [Client reply and duplicate handling](#subsystem-client-reply-and-duplicate-handling)
+8. [Agreement and progress oracle](#subsystem-agreement-and-progress-oracle)
+
 The inherited `relab/hotstuff` framework implements consensus protocols, cryptography, Gorums networking, leader rotation, clients, and the Twins simulator. This repository adds a bounded campaign, evidence oracle, exact scenario replay, and local product driver. Twins replicas are simulated participants; the network journey uses four replica goroutines and loopback sockets inside one process.
 
 This boundary map separates the actual product paths used by the verification driver.
+
+<details>
+<summary>Expand flow diagram 1</summary>
 
 ```mermaid
 flowchart LR
@@ -29,9 +66,14 @@ flowchart LR
     replicas --> client["Client command and reply quorum"]
 ```
 
+</details>
+
 The campaign CLI explores simulated partitions and checks committed histories. The local HotStuff CLI starts replicas and a client over loopback. Both paths reuse inherited consensus, certificate, and client code; neither represents multiple operating-system replica processes.
 
 This sequence shows how campaign cases, replay, and the real loopback journey produce separate evidence.
+
+<details>
+<summary>Expand flow diagram 2</summary>
 
 ```mermaid
 flowchart TD
@@ -50,6 +92,8 @@ flowchart TD
     oracle --> evidence["Save bounded result and public fingerprints"]
     network --> evidence
 ```
+
+</details>
 
 The oracle requires agreement on overlapping honest commit prefixes and non-vacuous progress in journeys designated to make progress. No quorum requires zero commits. A finite campaign tests these named cases; it does not prove universal safety or liveness. A failed run keeps its logs and failure verdict.
 
@@ -147,6 +191,9 @@ Liveness is progress toward committing commands. The permanent replica-1 isolati
 
 This section covers mechanisms used by the active campaign and documented local replica/client journey. The source audit excludes preserved protocol variants and inactive utilities. Rationale is inferred from current code, not attributed as historic author intent. The inherited HotStuff engine supplies consensus, crypto, networking, and client machinery; workbench additions supply bounded scenario replay and evidence checks.
 
+<details>
+<summary>Full technique index</summary>
+
 | Active subsystem | Technique cards | Source |
 | --- | --- | --- |
 | Campaign generation, validation, and replay | [Seeded partition scenario generation](#technique-seeded-partition-scenario-generation), [Bounded exact scenario replay](#technique-bounded-exact-scenario-replay) | [`cmd/campaign/main.go`](cmd/campaign/main.go), [`twins/generator.go`](twins/generator.go), [`twins/scenario.go`](twins/scenario.go) |
@@ -158,7 +205,21 @@ This section covers mechanisms used by the active campaign and documented local 
 | Client reply and duplicate handling | [f+1 client reply quorum](#technique-f-plus-one-client-reply-quorum), [Per-client monotone sequence deduplication](#technique-per-client-monotone-sequence-deduplication) | [`client/client.go`](client/client.go), [`server/clientio.go`](server/clientio.go) |
 | Agreement and progress oracle | [Honest-prefix agreement and nonvacuous progress checks](#technique-honest-prefix-agreement-and-nonvacuous-progress) | [`workbench/oracle.go`](workbench/oracle.go), [`cmd/campaign/main.go`](cmd/campaign/main.go) |
 
-### Seeded partition scenarios and replay
+</details>
+
+<a id="subsystem-campaign-generation-validation-and-replay"></a>
+
+### 1. Campaign generation, validation, and replay
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`cmd/campaign/main.go`](cmd/campaign/main.go), [`twins/generator.go`](twins/generator.go), [`twins/scenario.go`](twins/scenario.go).
+
+**Techniques.** [Seeded partition scenario generation](#technique-seeded-partition-scenario-generation), [Bounded exact scenario replay](#technique-bounded-exact-scenario-replay).
+
+**Related concepts.** [replica](#concept-replica), [view](#concept-view), [Twins](#concept-twins).
+
+#### Seeded partition scenarios and replay
 
 <a id="technique-seeded-partition-scenario-generation"></a>
 
@@ -174,6 +235,10 @@ This section covers mechanisms used by the active campaign and documented local 
 **Tradeoffs.** The seed controls generated ordering, but fresh keys and upstream map iteration prevent byte-identical execution traces.
 
 **Code and ownership.** [`Generator.Shuffle`](twins/generator.go#L89) and [`Generator.NextScenario`](twins/generator.go#L110). Inherited.
+
+
+
+**Used in.** [Campaign generation, validation, and replay](#subsystem-campaign-generation-validation-and-replay). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
@@ -192,9 +257,25 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`main`](cmd/campaign/main.go#L33), [`validate`](cmd/campaign/main.go#L172), and [`ExecuteScenario`](twins/scenario.go#L54). Campaign bounds and validation are extensions; the Twins executor is inherited.
 
+
+
+**Used in.** [Campaign generation, validation, and replay](#subsystem-campaign-generation-validation-and-replay). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
 
-### Twins network and event simulation
+<a id="subsystem-twins-network-and-adversarial-identities"></a>
+
+### 2. Twins network and adversarial identities
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`twins/network.go`](twins/network.go), [`twins/sender.go`](twins/sender.go), [`twins/timeoutmgr.go`](twins/timeoutmgr.go), [`twins/node.go`](twins/node.go).
+
+**Techniques.** [View-indexed message partitioning](#technique-view-indexed-message-partitioning), [Shared-key twin equivocation simulation](#technique-shared-key-twin-equivocation), [Discrete-time event simulation](#technique-discrete-time-event-simulation).
+
+**Related concepts.** [replica](#concept-replica), [view](#concept-view), [Twins](#concept-twins).
+
+#### Twins network and event simulation
 
 <a id="technique-view-indexed-message-partitioning"></a>
 
@@ -210,6 +291,10 @@ This section covers mechanisms used by the active campaign and documented local 
 **Tradeoffs.** The simulator's partition rule is an explicit schedule model. It does not model packet loss timing, kernel queues, or multi-host transport behavior.
 
 **Code and ownership.** [`Network.shouldDrop`](twins/network.go#L208) and [`emulatedSender.sendMessage`](twins/sender.go#L41). Inherited.
+
+
+
+**Used in.** [Twins network and adversarial identities](#subsystem-twins-network-and-adversarial-identities). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
@@ -228,6 +313,10 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`NodeID.Twin`](twins/network.go#L34) and [`Network.createNodesAndTwins`](twins/network.go#L119). Inherited.
 
+
+
+**Used in.** [Twins network and adversarial identities](#subsystem-twins-network-and-adversarial-identities). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
 
 <a id="technique-discrete-time-event-simulation"></a>
@@ -245,9 +334,25 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`Network.tick`](twins/network.go#L181), [`timeoutManager.advance`](twins/timeoutmgr.go#L19), and [`ExecuteScenario`](twins/scenario.go#L54). Inherited.
 
+
+
+**Used in.** [Twins network and adversarial identities](#subsystem-twins-network-and-adversarial-identities). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
 
-### Consensus certificates and pacemaker
+<a id="subsystem-chained-consensus-and-commit-path"></a>
+
+### 3. Chained consensus and commit path
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`protocol/rules/chainedhotstuff.go`](protocol/rules/chainedhotstuff.go), [`protocol/consensus/committer.go`](protocol/consensus/committer.go).
+
+**Techniques.** [Three-chain certified commit rule](#technique-three-chain-certified-commit), [Distinct-signer quorum certificate validation](#technique-quorum-certificate-validation).
+
+**Related concepts.** [HotStuff](#concept-hotstuff), [view](#concept-view), [quorum certificate](#concept-quorum-certificate), [liveness](#concept-liveness).
+
+#### Consensus certificates and pacemaker
 
 <a id="technique-three-chain-certified-commit"></a>
 
@@ -263,6 +368,10 @@ This section covers mechanisms used by the active campaign and documented local 
 **Tradeoffs.** Missing QCs, missing ancestors, or a gap in consecutive views prevents this commit rule from deciding a block. The liveness evidence documents a known gap under round-robin isolation.
 
 **Code and ownership.** [`ChainedHotStuff.CommitRule`](protocol/rules/chainedhotstuff.go#L48) and [`Committer.TryCommit`](protocol/consensus/committer.go#L44). Inherited.
+
+
+
+**Used in.** [Chained consensus and commit path](#subsystem-chained-consensus-and-commit-path). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
@@ -281,7 +390,23 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`Authority.VerifyQuorumCert`](security/cert/auth.go#L116) and [`distinctQuorum`](security/cert/auth.go#L225). The authority is inherited; distinct-signer and view checks are workbench changes.
 
+
+
+**Used in.** [Chained consensus and commit path](#subsystem-chained-consensus-and-commit-path). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
+
+<a id="subsystem-pacemaker-and-timeout-certificates"></a>
+
+### 4. Pacemaker and timeout certificates
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`protocol/synchronizer/synchronizer.go`](protocol/synchronizer/synchronizer.go), [`twins/timeoutmgr.go`](twins/timeoutmgr.go).
+
+**Techniques.** [Timeout-certificate view advancement](#technique-timeout-certificate-view-advancement).
+
+**Related concepts.** [view](#concept-view), [Twins](#concept-twins).
 
 <a id="technique-timeout-certificate-view-advancement"></a>
 
@@ -298,9 +423,25 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`Synchronizer.OnRemoteTimeout`](protocol/synchronizer/synchronizer.go#L209), [`Synchronizer.advanceView`](protocol/synchronizer/synchronizer.go#L250), and [`Authority.VerifyTimeoutCert`](security/cert/auth.go#L147). Inherited.
 
+
+
+**Used in.** [Pacemaker and timeout certificates](#subsystem-pacemaker-and-timeout-certificates). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
 
-### Signatures, dissemination, and replica execution
+<a id="subsystem-replica-signatures-and-network-dissemination"></a>
+
+### 5. Replica signatures and network dissemination
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`security/crypto/ecdsa.go`](security/crypto/ecdsa.go), [`security/cert/auth.go`](security/cert/auth.go), [`security/cert/cache.go`](security/cert/cache.go), [`protocol/comm/clique.go`](protocol/comm/clique.go), [`internal/orchestration/worker.go`](internal/orchestration/worker.go), [`replica/replica.go`](replica/replica.go).
+
+**Techniques.** [ECDSA partial signatures and quorum aggregation](#technique-signed-quorum-certificate-aggregation), [One-to-all proposals and votes to the next leader](#technique-one-to-all-vote-to-next-leader-dissemination), [Loopback RPC replica execution](#technique-loopback-rpc-replica-execution), [Bounded certificate verification cache](#technique-bounded-certificate-verification-cache).
+
+**Related concepts.** [replica](#concept-replica), [view](#concept-view), [Twins](#concept-twins).
+
+#### Signatures, dissemination, and replica execution
 
 <a id="technique-signed-quorum-certificate-aggregation"></a>
 
@@ -317,22 +458,9 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`ECDSA.Sign`](security/crypto/ecdsa.go#L62), [`ECDSA.Combine`](security/crypto/ecdsa.go#L75), and [`Authority.CreateQuorumCert`](security/cert/auth.go#L54). Inherited.
 
-</details>
 
-<a id="technique-bounded-certificate-verification-cache"></a>
 
-<details>
-<summary>Bounded certificate verification cache</summary>
-
-**Mechanism.** The authority wraps the configured crypto implementation with an LRU cache when the runtime sets a positive capacity. For a signature check, the cache key includes a mode byte, the message hash, encoded signature bytes, and participant IDs. A cache miss verifies through the underlying crypto implementation before storing the key. Signature combination is not cached.
-
-**Example.** The active Twins node configuration sets cache capacity to 100 entries.
-
-**Why here.** Repeated checks of the same signed message and participant set can reuse a completed verification in the campaign.
-
-**Tradeoffs.** Entries are bounded and evicted by recency. A cache hit is only valid for the full message and signature identity represented in the key.
-
-**Code and ownership.** [`NewAuthority`](security/cert/auth.go#L23), [`Cache.Verify`](security/cert/cache.go#L73), and [`writeSignatureKey`](security/cert/cache.go#L136). Inherited.
+**Used in.** [Replica signatures and network dissemination](#subsystem-replica-signatures-and-network-dissemination). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
@@ -351,6 +479,10 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`Clique.Disseminate`](protocol/comm/clique.go#L36) and [`Clique.Aggregate`](protocol/comm/clique.go#L42). Inherited.
 
+
+
+**Used in.** [Replica signatures and network dissemination](#subsystem-replica-signatures-and-network-dissemination). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
 
 <a id="technique-loopback-rpc-replica-execution"></a>
@@ -368,9 +500,44 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`runSingleExperiment`](internal/cli/run.go#L42), [`localWorker`](internal/cli/run.go#L135), [`Worker.createReplica`](internal/orchestration/worker.go#L139), and [`Replica.StartServers`](replica/replica.go#L107). Mixed: inherited worker and replica runtime with local workbench configuration.
 
+
+
+**Used in.** [Replica signatures and network dissemination](#subsystem-replica-signatures-and-network-dissemination). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
 
-### Event handling and client sequence control
+<a id="technique-bounded-certificate-verification-cache"></a>
+
+<details>
+<summary>Bounded certificate verification cache</summary>
+
+**Mechanism.** The authority wraps the configured crypto implementation with an LRU cache when the runtime sets a positive capacity. For a signature check, the cache key includes a mode byte, the message hash, encoded signature bytes, and participant IDs. A cache miss verifies through the underlying crypto implementation before storing the key. Signature combination is not cached.
+
+**Example.** The active Twins node configuration sets cache capacity to 100 entries.
+
+**Why here.** Repeated checks of the same signed message and participant set can reuse a completed verification in the campaign.
+
+**Tradeoffs.** Entries are bounded and evicted by recency. A cache hit is only valid for the full message and signature identity represented in the key.
+
+**Code and ownership.** [`NewAuthority`](security/cert/auth.go#L23), [`Cache.Verify`](security/cert/cache.go#L73), and [`writeSignatureKey`](security/cert/cache.go#L136). Inherited.
+
+
+
+**Used in.** [Replica signatures and network dissemination](#subsystem-replica-signatures-and-network-dissemination). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+<a id="subsystem-replica-event-processing"></a>
+
+### 6. Replica event processing
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`core/eventloop/eventloop.go`](core/eventloop/eventloop.go), [`core/eventloop/queue.go`](core/eventloop/queue.go).
+
+**Techniques.** [Serialized event dispatch with a bounded drop-oldest queue](#technique-serialized-event-dispatch-with-bounded-drop-oldest-queue).
+
+#### Event handling and client sequence control
 
 <a id="technique-serialized-event-dispatch-with-bounded-drop-oldest-queue"></a>
 
@@ -387,7 +554,23 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`EventLoop.processEvent`](core/eventloop/eventloop.go#L213) and [`queue.push`](core/eventloop/queue.go#L30). Inherited.
 
+
+
+**Used in.** [Replica event processing](#subsystem-replica-event-processing). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
+
+<a id="subsystem-client-reply-and-duplicate-handling"></a>
+
+### 7. Client reply and duplicate handling
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`client/client.go`](client/client.go), [`server/clientio.go`](server/clientio.go).
+
+**Techniques.** [f+1 client reply quorum](#technique-f-plus-one-client-reply-quorum), [Per-client monotone sequence deduplication](#technique-per-client-monotone-sequence-deduplication).
+
+**Related concepts.** [replica](#concept-replica).
 
 <a id="technique-f-plus-one-client-reply-quorum"></a>
 
@@ -403,6 +586,10 @@ This section covers mechanisms used by the active campaign and documented local 
 **Tradeoffs.** A reply threshold is the client's completion rule; it does not by itself prove that the command was committed consistently by all replicas.
 
 **Code and ownership.** [`qspec.ExecCommandQF`](client/client.go#L34), [`Client.Connect`](client/client.go#L126), and [`Client.handleCommands`](client/client.go#L276). Inherited.
+
+
+
+**Used in.** [Client reply and duplicate handling](#subsystem-client-reply-and-duplicate-handling). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
@@ -421,9 +608,25 @@ This section covers mechanisms used by the active campaign and documented local 
 
 **Code and ownership.** [`ClientIO.Exec`](server/clientio.go#L93), [`ClientIO.isDuplicate`](server/clientio.go#L123), and [`Client.sendCommands`](client/client.go#L198). Mixed: inherited sequence handling with added workbench regression coverage.
 
+
+
+**Used in.** [Client reply and duplicate handling](#subsystem-client-reply-and-duplicate-handling). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
 
-### Agreement and progress evidence
+<a id="subsystem-agreement-and-progress-oracle"></a>
+
+### 8. Agreement and progress oracle
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`workbench/oracle.go`](workbench/oracle.go), [`cmd/campaign/main.go`](cmd/campaign/main.go), [`twins/scenario.go`](twins/scenario.go).
+
+**Techniques.** [Honest-prefix agreement and nonvacuous progress checks](#technique-honest-prefix-agreement-and-nonvacuous-progress).
+
+**Related concepts.** [replica](#concept-replica), [view](#concept-view), [liveness](#concept-liveness).
+
+#### Agreement and progress evidence
 
 <a id="technique-honest-prefix-agreement-and-nonvacuous-progress"></a>
 
@@ -439,6 +642,10 @@ This section covers mechanisms used by the active campaign and documented local 
 **Tradeoffs.** This is a finite oracle over recorded journeys. It is not a proof of universal safety or liveness; permanent isolation with round-robin leadership remains a known failed diagnostic.
 
 **Code and ownership.** [`Check`](workbench/oracle.go#L12), [`controlled`](cmd/campaign/main.go#L130), and [`main`](cmd/campaign/main.go#L33). Extension.
+
+
+
+**Used in.** [Agreement and progress oracle](#subsystem-agreement-and-progress-oracle). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
